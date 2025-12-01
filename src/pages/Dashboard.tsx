@@ -1,15 +1,73 @@
-import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { 
   Sparkles, Home, Upload, LogOut,User, 
-  LayoutDashboard, Image as ImageIcon 
+  LayoutDashboard, Image as ImageIcon, Coins 
 } from 'lucide-react'
+import { supabase } from '../lib/supabaseClient'
 
 const Dashboard = () => {
-  const { user, logout } = useAuth()
+  const { user, logout, refreshUserTokens } = useAuth()
+  const tokenCount = typeof user?.tokens === 'number' ? user!.tokens! : 10
   const navigate = useNavigate()
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
+  const [buyOpen, setBuyOpen] = useState(false)
+  const [buyLoading, setBuyLoading] = useState(false)
+  const [buyAmount, setBuyAmount] = useState<number>(10)
+  const [toast, setToast] = useState<string | null>(null)
+  const location = useLocation()
+
+  // Stripe Payment Links from env (configure these in .env)
+  const STRIPE_LINK_10 = import.meta.env.VITE_STRIPE_LINK_10 as string | undefined
+  const STRIPE_LINK_20 = import.meta.env.VITE_STRIPE_LINK_20 as string | undefined
+  const STRIPE_LINK_50 = import.meta.env.VITE_STRIPE_LINK_50 as string | undefined
+  const linkForAmount = (amt: number) => (
+    amt === 10 ? STRIPE_LINK_10 : amt === 20 ? STRIPE_LINK_20 : amt === 50 ? STRIPE_LINK_50 : undefined
+  )
+
+  // Auto-refresh tokens from DB periodically and when tab is focused
+  useEffect(() => {
+    let timer: number | undefined
+    const tick = () => {
+      refreshUserTokens && refreshUserTokens()
+    }
+    tick()
+    timer = window.setInterval(tick, 10000)
+    const onVis = () => { if (document.visibilityState === 'visible') tick() }
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      if (timer) window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVis)
+    }
+  }, [refreshUserTokens])
+
+  // Handle return from Stripe Payment Link
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const payment = params.get('payment')
+    const amountStr = params.get('amount')
+    const amount = amountStr ? parseInt(amountStr, 10) : NaN
+    if (payment === 'success' && !Number.isNaN(amount) && user?.email) {
+      ;(async () => {
+        try {
+          const { error } = await supabase
+            .from('users')
+            .update({ tokens: tokenCount + amount })
+            .eq('gmail', user.email)
+            .select('tokens')
+            .maybeSingle()
+          if (error) throw error
+          await (refreshUserTokens && refreshUserTokens())
+          setToast('Payment successful. Tokens added!')
+          window.setTimeout(() => setToast(null), 2500)
+        } catch {
+          setToast('Could not credit tokens. Please contact support.')
+          window.setTimeout(() => setToast(null), 3000)
+        }
+      })()
+    }
+  }, [location.search, refreshUserTokens, supabase, tokenCount, user?.email])
 
   const handleLogout = () => {
     logout()
@@ -59,6 +117,24 @@ const Dashboard = () => {
               ))}
             </ul>
           </nav>
+
+          {/* Tokens */}
+          <div className="mt-2">
+            <div className="flex items-center gap-2 px-4 py-3 rounded-xl border border-white/10 bg-white/5">
+              <Coins className="w-5 h-5 text-yellow-300" />
+              <div className="flex-1">
+                <p className="text-xs text-white/60">Tokens</p>
+                <p className="text-sm font-semibold">{tokenCount}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBuyOpen(true)}
+                className="text-xs px-3 py-1 rounded-lg bg-primary/80 hover:bg-primary text-white"
+              >
+                Buy
+              </button>
+            </div>
+          </div>
 
           {/* User Profile */}
           <div className="mt-auto">
@@ -222,6 +298,56 @@ const Dashboard = () => {
           </div>
         </div>
       </main>
+
+      {/* Buy Tokens Modal */}
+      {buyOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setBuyOpen(false)} />
+          <div className="relative glass-card p-5 w-full max-w-sm mx-4">
+            <h3 className="text-lg font-semibold mb-3">Purchase Tokens</h3>
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-2">
+                {[10, 20, 50].map((amt) => (
+                  <button
+                    key={amt}
+                    onClick={() => setBuyAmount(amt)}
+                    className={`px-3 py-2 rounded-xl border text-sm ${
+                      buyAmount === amt ? 'bg-primary text-white border-transparent' : 'border-white/15 hover:bg-white/10'
+                    }`}
+                  >
+                    {amt} Tokens
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                disabled={buyLoading}
+                onClick={() => {
+                  const link = linkForAmount(buyAmount)
+                  if (!link) {
+                    setToast('Stripe link not configured. Please set it in .env')
+                    window.setTimeout(() => setToast(null), 2500)
+                    return
+                  }
+                  setBuyLoading(true)
+                  // Redirect to Stripe Payment Link
+                  window.location.href = link
+                }}
+                className="w-full btn-gradient disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {buyLoading ? 'Redirecting...' : `Pay with Stripe (${buyAmount} Tokens)`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl bg-emerald-500/20 border border-emerald-400/40 text-emerald-200">
+          {toast}
+        </div>
+      )}
 
       {showLogoutConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">

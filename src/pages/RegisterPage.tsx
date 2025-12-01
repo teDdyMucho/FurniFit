@@ -43,7 +43,7 @@ const RegisterPage = () => {
     const success = await register(name, email, password)
 
     if (success) {
-      navigate('/login')
+      navigate(`/verify?email=${encodeURIComponent(email)}`)
     } else {
       setError('Registration failed. Please try again.')
     }

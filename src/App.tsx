@@ -9,6 +9,7 @@ import UploadPage from './pages/UploadPage'
 import HistoryPage from './pages/HistoryPage'
 import PrivacyPage from './pages/PrivacyPage'
 import TermsPage from './pages/TermsPage'
+import VerifyOtpPage from './pages/VerifyOtpPage'
 
 function App() {
   return (
@@ -18,6 +19,7 @@ function App() {
           <Route path="/" element={<HomePage />} />
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/verify" element={<VerifyOtpPage />} />
           <Route
             path="/dashboard"
             element={

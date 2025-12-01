@@ -4,11 +4,16 @@ import { useAuth } from '../contexts/AuthContext'
 import { 
   Sparkles, Upload, X, Check, AlertCircle,
   LayoutDashboard, LogOut, Home as HomeIcon, Mountain, Star, Waves,
-  Briefcase, Utensils, Image as ImageIcon, Download
+  Briefcase, Utensils, Image as ImageIcon, Download, Coins
 } from 'lucide-react'
 
+const WEBHOOK_BASE = import.meta.env.VITE_WEBHOOK_BASE as string
+const WEBHOOK_SUBMIT = import.meta.env.VITE_WEBHOOK_SUBMIT as string
+const WEBHOOK_TOKEN_COUNT = import.meta.env.VITE_WEBHOOK_TOKEN_COUNT as string
+
 const UploadPage = () => {
-  const { user, logout } = useAuth()
+  const { user, logout, setUserTokens, refreshUserTokens } = useAuth()
+  const tokenCount = typeof user?.tokens === 'number' ? user!.tokens! : 10
   const [dragActive, setDragActive] = useState(false)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
@@ -256,13 +261,24 @@ const UploadPage = () => {
 
   const handleUpload = async () => {
     if (!selectedFile) return
+    // Block when out of tokens
+    if (typeof user?.tokens === 'number' && user.tokens <= 0) {
+      setError('You are out of tokens. Please top up to continue.')
+      return
+    }
 
     setUploading(true)
     setError(null)
 
     try {
       // Store in localStorage (in production, this would be an API call)
-      const uploads = JSON.parse(localStorage.getItem('furnifit_uploads') || '[]')
+      let uploads: any[] = []
+      try {
+        const raw = localStorage.getItem('furnifit_uploads') || '[]'
+        uploads = Array.isArray(JSON.parse(raw)) ? JSON.parse(raw) : []
+      } catch {
+        uploads = []
+      }
       const payload = {
         id: Date.now(),
         userId: user?.id,
@@ -277,7 +293,9 @@ const UploadPage = () => {
         fileType: selectedFile.type,
       }
       uploads.push(payload)
-      localStorage.setItem('furnifit_uploads', JSON.stringify(uploads))
+      try {
+        localStorage.setItem('furnifit_uploads', JSON.stringify(uploads))
+      } catch {}
 
       try {
         const resizedDataUrl = previewUrl ? await downscaleDataUrl(previewUrl, 1024) : ''
@@ -288,14 +306,19 @@ const UploadPage = () => {
         const webhookBody = {
           ...rest,
           imageBase64: previewBase64,
+          userEmail: user?.email || null,
+          userTokens: typeof user?.tokens === 'number' ? user!.tokens! : null,
         }
-        const res = await fetch('https://primary-production-6722.up.railway.app/webhook/submit', {
+        const submitUrl = `${WEBHOOK_BASE}${WEBHOOK_SUBMIT}`
+        const res = await fetch(submitUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(webhookBody),
         })
         if (!res.ok) {
-          setError(`Webhook error: ${res.status} ${res.statusText}`)
+          let details = ''
+          try { details = (await res.text()).slice(0, 200) } catch {}
+          setError(`Webhook error ${res.status}: ${details || res.statusText}`)
           setUploading(false)
           return
         }
@@ -306,6 +329,24 @@ const UploadPage = () => {
           setOutputUrl(headerUrl)
           saveHistoryEntry(headerUrl)
           setUploadSuccess(true)
+          // notify token count webhook and update tokens if response returns a value
+          try {
+            const resp = await fetch(`${WEBHOOK_BASE}${WEBHOOK_TOKEN_COUNT}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: user?.email || null, tokens: typeof user?.tokens === 'number' ? user!.tokens! : null }),
+            })
+            if (resp.ok) {
+              let data: any = null
+              try { data = await resp.json() } catch {}
+              const next = data?.tokens ?? data?.token ?? data?.balance ?? data?.remainingTokens
+              if (typeof next === 'number') {
+                setUserTokens && setUserTokens(next)
+              } else {
+                refreshUserTokens && (await refreshUserTokens())
+              }
+            }
+          } catch {}
           setUploading(false)
           return
         }
@@ -315,6 +356,23 @@ const UploadPage = () => {
           setOutputUrl(res.url)
           saveHistoryEntry(res.url)
           setUploadSuccess(true)
+          try {
+            const resp = await fetch(`${WEBHOOK_BASE}${WEBHOOK_TOKEN_COUNT}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: user?.email || null, tokens: typeof user?.tokens === 'number' ? user!.tokens! : null }),
+            })
+            if (resp.ok) {
+              let data: any = null
+              try { data = await resp.json() } catch {}
+              const next = data?.tokens ?? data?.token ?? data?.balance ?? data?.remainingTokens
+              if (typeof next === 'number') {
+                setUserTokens && setUserTokens(next)
+              } else {
+                refreshUserTokens && (await refreshUserTokens())
+              }
+            }
+          } catch {}
           setUploading(false)
           return
         }
@@ -330,6 +388,23 @@ const UploadPage = () => {
           setOutputUrl(url)
           saveHistoryEntry(url)
           setUploadSuccess(true)
+          try {
+            const resp = await fetch(`${WEBHOOK_BASE}${WEBHOOK_TOKEN_COUNT}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: user?.email || null, tokens: typeof user?.tokens === 'number' ? user!.tokens! : null }),
+            })
+            if (resp.ok) {
+              let data: any = null
+              try { data = await resp.json() } catch {}
+              const next = data?.tokens ?? data?.token ?? data?.balance ?? data?.remainingTokens
+              if (typeof next === 'number') {
+                setUserTokens && setUserTokens(next)
+              } else {
+                refreshUserTokens && (await refreshUserTokens())
+              }
+            }
+          } catch {}
           setUploading(false)
         } else {
           // Could not parse a URL; stop loader and show error
@@ -337,7 +412,8 @@ const UploadPage = () => {
           setUploading(false)
         }
       } catch (innerErr) {
-        setError('Webhook request failed. Please try again.')
+        const msg = innerErr instanceof Error ? innerErr.message : 'Webhook request failed. Please try again.'
+        setError(msg)
         setUploading(false)
       }
     } catch (err) {
@@ -450,6 +526,17 @@ const UploadPage = () => {
               ))}
             </ul>
           </nav>
+
+          {/* Token badge */}
+          <div className="mt-2">
+            <div className="flex items-center gap-2 px-4 py-3 rounded-xl border border-white/10 bg-white/5">
+              <Coins className="w-5 h-5 text-yellow-300" />
+              <div className="flex-1">
+                <p className="text-xs text-white/60">Tokens</p>
+                <p className="text-sm font-semibold">{tokenCount}</p>
+              </div>
+            </div>
+          </div>
 
           <div className="mt-auto">
             <button
@@ -655,14 +742,16 @@ const UploadPage = () => {
                     {!uploadSuccess && (
                       <button
                         onClick={handleUpload}
-                        disabled={uploading || !selectedStyle}
+                        disabled={uploading || !selectedStyle || tokenCount <= 0}
                         className="btn-gradient w-full disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base"
                       >
                         {uploading
                           ? 'Submitting...'
-                          : !selectedStyle
-                            ? 'Choose a style to submit'
-                            : 'Submit'}
+                          : tokenCount <= 0
+                            ? 'Out of tokens'
+                            : !selectedStyle
+                              ? 'Choose a style to submit'
+                              : 'Submit'}
                       </button>
                     )}
                     {uploadSuccess && (
